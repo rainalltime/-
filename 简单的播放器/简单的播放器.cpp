@@ -19,6 +19,9 @@ Modification:
 
 #define __STDC_CONSTANT_MACROS  
 
+//此宏开启则为严格40ms一帧
+ #define 严格
+
 #ifdef _WIN32  
 //Windows  
 extern "C"
@@ -93,11 +96,10 @@ int main(int argc, char* argv[])
 	SDL_Window *screen;
 	SDL_Renderer* sdlRenderer;
 	SDL_Texture* sdlTexture;
-	SDL_Rect sdlRect;
 	SDL_Thread *video_tid;
 	SDL_Event event;
 
-	struct SwsContext *img_convert_ctx;
+	SwsContext *img_convert_ctx;
 
 	char filepath[]="test1ooo480x272.h265"; 
 	//char filepath[] = "test2.flv";
@@ -117,7 +119,7 @@ int main(int argc, char* argv[])
 	}
 	videoindex = -1;
 	for (i = 0; i < pFormatCtx->nb_streams; i++) {
-		if (pFormatCtx->streams[i]->codec->codec_type == AVMEDIA_TYPE_VIDEO) {
+		if (pFormatCtx->streams[i]->codecpar->codec_type == AVMEDIA_TYPE_VIDEO) {
 			videoindex = i;
 			break;
 		}
@@ -126,7 +128,10 @@ int main(int argc, char* argv[])
 		printf("Didn't find a video stream.\n");
 		return -1;
 	}
-	pCodecCtx = pFormatCtx->streams[videoindex]->codec;
+	AVCodec *codec = avcodec_find_decoder(pFormatCtx->streams[i]->codecpar->codec_id);
+	
+	pCodecCtx = avcodec_alloc_context3(codec);//pFormatCtx->streams[videoindex]->codec;
+	avcodec_parameters_to_context(pCodecCtx, pFormatCtx->streams[videoindex]->codecpar);
 	pCodec = avcodec_find_decoder(pCodecCtx->codec_id);
 	if (pCodec == NULL) {
 		printf("Codec not found.\n");
@@ -144,10 +149,10 @@ int main(int argc, char* argv[])
 		AV_PIX_FMT_YUV420P, pCodecCtx->width, pCodecCtx->height, 1);
 
 	//Output Info-----------------------------  
-	printf("---------------- File Information ---------------\n");
+	printf("----------------文件信息-来邦科技 ---------------\n");
 	av_dump_format(pFormatCtx, 0, filepath, 0);
 	printf("-------------------------------------------------\n");
-
+	//设置一些参数sws_scale会用到
 	img_convert_ctx = sws_getContext(pCodecCtx->width, pCodecCtx->height, pCodecCtx->pix_fmt,
 		pCodecCtx->width, pCodecCtx->height, AV_PIX_FMT_YUV420P, SWS_BICUBIC, NULL, NULL, NULL);
 
@@ -159,7 +164,7 @@ int main(int argc, char* argv[])
 	//SDL 2.0 Support for multiple windows  
 	screen_w = pCodecCtx->width;
 	screen_h = pCodecCtx->height;
-	screen = SDL_CreateWindow("Simplest ffmpeg player's Window", SDL_WINDOWPOS_UNDEFINED, SDL_WINDOWPOS_UNDEFINED,
+	screen = SDL_CreateWindow("简单播放器-来邦科技", SDL_WINDOWPOS_UNDEFINED, SDL_WINDOWPOS_UNDEFINED,
 		screen_w, screen_h, SDL_WINDOW_SHOWN);
 
 	if (!screen) {
@@ -171,21 +176,20 @@ int main(int argc, char* argv[])
 	//YV12: Y + V + U  (3 planes)  
 	sdlTexture = SDL_CreateTexture(sdlRenderer, SDL_PIXELFORMAT_IYUV, SDL_TEXTUREACCESS_STREAMING, pCodecCtx->width, pCodecCtx->height);
 
-	sdlRect.x = 0;
-	sdlRect.y = 0;
-	sdlRect.w = screen_w;
-	sdlRect.h = screen_h;
 
 	packet = (AVPacket *)av_malloc(sizeof(AVPacket));
-
+#ifdef 严格
 	video_tid = SDL_CreateThread(sfp_refresh_thread, NULL, NULL);
+#endif
 	//------------SDL End------------  
 	//Event Loop  
 
 	for (;;) {
-		//Wait  
+		//Wait 
+#ifdef 严格
 		SDL_WaitEvent(&event);
 		if (event.type == SFM_REFRESH_EVENT) {
+#endif
 			while (1) {
 				if (av_read_frame(pFormatCtx, packet)<0)
 					thread_exit = 1;
@@ -193,13 +197,14 @@ int main(int argc, char* argv[])
 				if (packet->stream_index == videoindex)
 					break;
 			}
-			ret = avcodec_decode_video2(pCodecCtx, pFrame, &got_picture, packet);
+			ret =avcodec_send_packet(pCodecCtx, packet)&
+			avcodec_receive_frame(pCodecCtx, pFrame);
 			if (ret < 0) {
 				printf("Decode Error.\n");
 				return -1;
 			}
-			if (got_picture) {
-				sws_scale(img_convert_ctx, (const unsigned char* const*)pFrame->data, pFrame->linesize, 0, pCodecCtx->height, pFrameYUV->data, pFrameYUV->linesize);
+			else {
+				sws_scale(img_convert_ctx, (const unsigned char* const*)pFrame->data, pFrame->linesize, 0, pCodecCtx->height, pFrameYUV->data, pFrameYUV->linesize);//生成图片
 				//SDL---------------------------  
 				SDL_UpdateTexture(sdlTexture, NULL, pFrameYUV->data[0], pFrameYUV->linesize[0]);
 				SDL_RenderClear(sdlRenderer);
@@ -208,7 +213,9 @@ int main(int argc, char* argv[])
 				SDL_RenderPresent(sdlRenderer);
 				//SDL End-----------------------  
 			}
-			av_free_packet(packet);
+			av_packet_unref(packet);
+#ifdef 严格
+
 		}
 		else if (event.type == SDL_KEYDOWN) {
 			//Pause  
@@ -221,7 +228,11 @@ int main(int argc, char* argv[])
 		else if (event.type == SFM_BREAK_EVENT) {
 			break;
 		}
+#else
+			SDL_Delay(40);
+			if (thread_exit)break;
 
+#endif
 	}
 
 	sws_freeContext(img_convert_ctx);
